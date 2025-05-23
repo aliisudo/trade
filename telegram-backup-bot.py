@@ -360,7 +360,7 @@ class XUIBackupBot:
     # --- تابع button_handler با اصلاحات ---
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """هندلر برای تمام CallbackQuery ها."""
-        query: CallbackQuery | None = update.callback_query
+        query = update.callback_query
         if not query:
             logger.warning("button_handler received an update without a callback_query")
             return ConversationHandler.END
@@ -376,55 +376,12 @@ class XUIBackupBot:
 
         logger.debug(f"Button pressed: {query_data} in chat {chat_id}")
 
-        # --- منطق دکمه‌ها ---
-        # دکمه‌هایی که مکالمه را شروع می‌کنند یا بخشی از مکالمه هستند
-        if query_data == "add_panel":
-            await query.edit_message_text(
-                "لطفاً آدرس کامل پنل را ارسال کنید (مثال: http://example.com:8080):"
-            )
-            return PANEL_URL # ورود به مکالمه افزودن پنل
+        # --- خارج از conversation handlers ---
+        if query_data == "back_to_menu":
+            context.user_data.clear()
+            await self.send_main_menu(context, chat_id=chat_id, message_id_to_edit=message_id)
+            return ConversationHandler.END
 
-        elif query_data == "set_backup_interval":
-            current_interval = self._get_setting("backup_interval", DEFAULT_BACKUP_INTERVAL)
-            await query.edit_message_text(
-                f"فاصله بکاپ‌گیری فعلی: {current_interval} دقیقه.\n"
-                f"لطفاً فاصله جدید را به دقیقه وارد کنید (حداقل {MIN_BACKUP_INTERVAL} دقیقه):"
-            )
-            return SET_BACKUP_INTERVAL # ورود به مکالمه تنظیم فاصله
-
-        elif query_data.startswith("delete_"): # <--- درخواست اولیه حذف
-            panel_id_to_delete = int(query_data.split("_")[1])
-            context.user_data['panel_to_delete'] = panel_id_to_delete # ذخیره آیدی برای تایید
-            keyboard = [
-                [
-                    KeyboardButton(f"✅ بله، حذف کن (پنل {panel_id_to_delete})"),
-                    KeyboardButton("❌ خیر، انصراف")
-                ]
-            ]
-            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-            await query.edit_message_text(
-                f"⚠️ آیا از حذف پنل {panel_id_to_delete} مطمئن هستید؟ این عمل قابل بازگشت نیست.",
-                reply_markup=reply_markup
-            )
-            return CONFIRM_DELETE # ورود به مرحله تایید حذف
-
-        elif query_data == "confirm_delete": # <--- تایید حذف (داخل مکالمه CONFIRM_DELETE)
-            panel_id = context.user_data.get('panel_to_delete')
-            if panel_id:
-                await self._perform_delete(query, panel_id, context) # اجرای حذف واقعی
-            else:
-                await query.edit_message_text("خطا: پنل مورد نظر برای حذف مشخص نیست.")
-                await self.show_panels_list(query, context) # نمایش مجدد لیست
-            context.user_data.pop('panel_to_delete', None) # پاک کردن داده موقت
-            return ConversationHandler.END # پایان مکالمه حذف
-
-        elif query_data == "cancel_delete": # <--- انصراف از حذف (داخل مکالمه CONFIRM_DELETE)
-            await query.answer("عملیات حذف لغو شد.")
-            await self.show_panels_list(query, context) # نمایش مجدد لیست پنل‌ها
-            context.user_data.pop('panel_to_delete', None) # پاک کردن داده موقت
-            return ConversationHandler.END # پایان مکالمه حذف
-
-        # --- دکمه‌های خارج از مکالمه یا fallbacks ---
         elif query_data == "list_panels":
             await self.show_panels_list(query, context)
             return ConversationHandler.END
@@ -437,8 +394,6 @@ class XUIBackupBot:
             except Exception as e:
                 logger.error(f"Force backup failed: {str(e)}", exc_info=True)
                 await query.edit_message_text(f"❌ خطا در شروع بکاپ فوری:\n{str(e)}")
-            # await asyncio.sleep(3) # تاخیر اختیاری
-            # await self.send_main_menu(context, chat_id=chat_id, message_id_to_edit=message_id)
             return ConversationHandler.END
 
         elif query_data == "settings":
@@ -450,15 +405,37 @@ class XUIBackupBot:
             await self.toggle_panel_status(query, panel_id, context)
             return ConversationHandler.END
 
-        elif query_data == "back_to_menu":
-            logger.debug("Handling back_to_menu button.")
-            context.user_data.clear() # پاک کردن داده‌های مکالمه قبلی
-            await self.send_main_menu(context, chat_id=chat_id, message_id_to_edit=message_id)
-            return ConversationHandler.END # <--- مهم: پایان دادن به هر مکالمه‌ای
+        # --- سایر دکمه‌ها با هماهنگی با conversation handlers ---
+        elif query_data == "add_panel":
+            await query.edit_message_text(
+                "لطفاً آدرس کامل پنل را ارسال کنید (مثال: http://example.com:8080):"
+            )
+            return PANEL_URL
 
-        # --- دکمه‌های داخل مکالمه افزودن پنل (باید توسط ConversationHandler مدیریت شوند) ---
-        # این بخش در عمل توسط ConversationHandler و states مدیریت می‌شود،
-        # اما برای اطمینان در اینجا هم قرار می‌دهیم (اگر به عنوان fallback فراخوانی شود)
+        elif query_data == "set_backup_interval":
+            current_interval = self._get_setting("backup_interval", DEFAULT_BACKUP_INTERVAL)
+            await query.edit_message_text(
+                f"فاصله بکاپ‌گیری فعلی: {current_interval} دقیقه.\n"
+                f"لطفاً فاصله جدید را به دقیقه وارد کنید (حداقل {MIN_BACKUP_INTERVAL} دقیقه):"
+            )
+            return SET_BACKUP_INTERVAL
+
+        elif query_data.startswith("delete_"):
+            panel_id_to_delete = int(query_data.split("_")[1])
+            context.user_data['panel_to_delete'] = panel_id_to_delete
+            keyboard = [
+                [
+                    KeyboardButton(f"✅ بله، حذف کن (پنل {panel_id_to_delete})"),
+                    KeyboardButton("❌ خیر، انصراف")
+                ]
+            ]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            await query.edit_message_text(
+                f"⚠️ آیا از حذف پنل {panel_id_to_delete} مطمئن هستید؟ این عمل قابل بازگشت نیست.",
+                reply_markup=reply_markup
+            )
+            return CONFIRM_DELETE
+
         elif query_data == "confirm_add":
             await self.confirm_panel_addition(query, context)
             return ConversationHandler.END
@@ -473,6 +450,7 @@ class XUIBackupBot:
             logger.warning(f"Unhandled button data in button_handler: {query_data}")
             await self.send_main_menu(context, chat_id=chat_id, message_id_to_edit=message_id)
             return ConversationHandler.END
+
     # --- پایان تابع button_handler ---
 
 
@@ -485,10 +463,17 @@ class XUIBackupBot:
                 )
                 panels = cursor.fetchall()
 
+            if isinstance(update, Update):
+                # اگر از message آمده
+                message_obj = update.message
+            else:
+                # اگر از callback_query آمده
+                message_obj = update.message
+
             if not panels:
                 keyboard = [[KeyboardButton("🔙 بازگشت به منو")]]
                 reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-                await update.message.reply_text(
+                await message_obj.reply_text(
                     "⚠️ هیچ پنلی ثبت نشده است!", 
                     reply_markup=reply_markup
                 )
@@ -517,17 +502,19 @@ class XUIBackupBot:
             keyboard.append([KeyboardButton("🔙 بازگشت به منو")])
             reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-            await update.message.reply_text(message, reply_markup=reply_markup)
+            await message_obj.reply_text(message, reply_markup=reply_markup)
 
         except Exception as e:
             logger.error(f"Error in show_panels_list: {str(e)}", exc_info=True)
-            keyboard = [[KeyboardButton("🔙 بازگشت به منو")]]
-            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-            await update.message.reply_text(
-                "⚠️ خطا در نمایش لیست پنل‌ها.", 
-                reply_markup=reply_markup
-            )
-
+            try:
+                if isinstance(update, Update):
+                    # اگر از message آمده
+                    await update.message.reply_text("⚠️ خطا در نمایش لیست پنل‌ها.")
+                else:
+                    # اگر از callback_query آمده
+                    await update.edit_message_text("⚠️ خطا در نمایش لیست پنل‌ها.")
+            except Exception:
+                logger.error("Failed to send error message in show_panels_list")
 
     async def toggle_panel_status(self, update: Update, panel_id: int, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -539,7 +526,10 @@ class XUIBackupBot:
                 result = cursor.fetchone()
                 
                 if not result:
-                    await update.message.reply_text("⚠️ پنل مورد نظر یافت نشد!")
+                    if isinstance(update, Update):
+                        await update.message.reply_text("⚠️ پنل مورد نظر یافت نشد!")
+                    else:
+                        await update.edit_message_text("⚠️ پنل مورد نظر یافت نشد!")
                     return
 
                 new_status = not result[0]
@@ -549,14 +539,27 @@ class XUIBackupBot:
                 )
 
             status_text = "فعال" if new_status else "غیرفعال"
-            await update.message.reply_text(
-                f"✅ وضعیت پنل {panel_id} با موفقیت به {status_text} تغییر یافت."
-            )
-            await self.show_panels_list(update, context)
+            
+            if isinstance(update, Update):
+                # اگر از message آمده
+                await update.message.reply_text(
+                    f"✅ وضعیت پنل {panel_id} با موفقیت به {status_text} تغییر یافت."
+                )
+                await self.show_panels_list(update, context)
+            else:
+                # اگر از callback_query آمده
+                await update.edit_message_text(
+                    f"✅ وضعیت پنل {panel_id} با موفقیت به {status_text} تغییر یافت."
+                )
+                # برگشت به منوی اصلی
+                await self.send_main_menu(context, chat_id=update.message.chat.id)
 
         except Exception as e:
             logger.error(f"Error in toggle_panel_status: {str(e)}")
-            await update.message.reply_text("❌ خطا در تغییر وضعیت پنل!")
+            if isinstance(update, Update):
+                await update.message.reply_text("❌ خطا در تغییر وضعیت پنل!")
+            else:
+                await update.edit_message_text("❌ خطا در تغییر وضعیت پنل!")
 
     # --- تابع حذف واقعی پنل ---
     async def _perform_delete(self, update: Update, panel_id: int, context: ContextTypes.DEFAULT_TYPE):
@@ -565,14 +568,26 @@ class XUIBackupBot:
                 cursor = self.db_conn.cursor()
                 cursor.execute("DELETE FROM panels WHERE id = ?", (panel_id,))
                 
-            await update.message.reply_text(
-                f"✅ پنل {panel_id} با موفقیت حذف شد."
-            )
-            await self.show_panels_list(update, context)
+            if isinstance(update, Update):
+                # اگر از message آمده
+                await update.message.reply_text(
+                    f"✅ پنل {panel_id} با موفقیت حذف شد."
+                )
+                await self.show_panels_list(update, context)
+            else:
+                # اگر از callback_query آمده
+                await update.edit_message_text(
+                    f"✅ پنل {panel_id} با موفقیت حذف شد."
+                )
+                # برگشت به منوی اصلی
+                await self.send_main_menu(context, chat_id=update.message.chat.id)
 
         except Exception as e:
             logger.error(f"Error in _perform_delete: {str(e)}")
-            await update.message.reply_text("❌ خطا در حذف پنل!")
+            if isinstance(update, Update):
+                await update.message.reply_text("❌ خطا در حذف پنل!")
+            else:
+                await update.edit_message_text("❌ خطا در حذف پنل!")
 
     async def show_settings(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -796,7 +811,7 @@ class XUIBackupBot:
         text = update.message.text
         user_id = update.effective_user.id
         
-        # اول چک می‌کنیم که کاربر ادمین باشد
+        # بررسی ادمین بودن کاربر
         if not await self.is_admin(user_id):
             await update.message.reply_text(
                 "⛔️ شما به این ربات دسترسی ندارید!\n\n"
@@ -805,15 +820,34 @@ class XUIBackupBot:
             )
             return ConversationHandler.END
 
-        # دکمه‌های مخصوص صاحب ربات
+        # --- پردازش دکمه‌های تایید و انصراف حذف ---
+        if text.startswith("✅ بله، حذف کن"):
+            panel_id = context.user_data.get('panel_to_delete')
+            if panel_id:
+                await self._perform_delete(update, panel_id, context)
+                context.user_data.pop('panel_to_delete', None)
+            else:
+                await update.message.reply_text("⚠️ خطا: پنل مورد نظر برای حذف مشخص نیست.")
+            
+            await self.send_main_menu(context, chat_id=update.message.chat_id)
+            return ConversationHandler.END
+            
+        elif text == "❌ خیر، انصراف":
+            context.user_data.pop('panel_to_delete', None)
+            await update.message.reply_text("عملیات حذف لغو شد.")
+            await self.send_main_menu(context, chat_id=update.message.chat_id)
+            return ConversationHandler.END
+
+        # --- مدیریت ادمین‌ها (مخصوص صاحب ربات) ---
         if text in ["👥 مدیریت ادمین‌ها", "➕ افزودن ادمین جدید", "❌ حذف ادمین"]:
             if not await self.is_owner(user_id):
                 await update.message.reply_text("⚠️ این بخش فقط برای صاحب ربات در دسترس است!")
+                await self.send_main_menu(context, chat_id=update.message.chat_id)
                 return ConversationHandler.END
             
             if text == "👥 مدیریت ادمین‌ها":
                 await self.list_admins(update, context)
-                return
+                return ConversationHandler.END
             elif text == "➕ افزودن ادمین جدید":
                 keyboard = [[KeyboardButton("🔙 بازگشت به منو")]]
                 reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -831,7 +865,7 @@ class XUIBackupBot:
                 )
                 return REMOVE_ADMIN
 
-        # دکمه‌های عمومی برای همه ادمین‌ها
+        # --- دکمه‌های عمومی برای همه ادمین‌ها ---
         if text == "📋 لیست پنل‌ها":
             await self.show_panels_list(update, context)
             return
@@ -866,9 +900,10 @@ class XUIBackupBot:
             try:
                 panel_id = int(text.split("پنل")[1].strip())
                 await self.toggle_panel_status(update, panel_id, context)
+                return ConversationHandler.END
             except (ValueError, IndexError):
                 await update.message.reply_text("❌ خطا در پردازش درخواست!")
-            return
+                return ConversationHandler.END
 
         elif text.startswith("🗑 حذف پنل"):
             try:
@@ -887,6 +922,9 @@ class XUIBackupBot:
                 await update.message.reply_text("❌ خطا در پردازش درخواست!")
             return
 
+        # اگر به هیچ کدام از شرایط بالا نرسید
+        logger.warning(f"Unhandled button text: {text}")
+        await self.send_main_menu(context, chat_id=update.message.chat_id)
         return ConversationHandler.END
 
     async def is_admin(self, user_id: int) -> bool:
@@ -1043,11 +1081,15 @@ class XUIBackupBot:
         # --- Conversation Handler ---
         conv_handler = ConversationHandler(
             entry_points=[
+                CommandHandler("start", self.start),
                 MessageHandler(filters.Regex("^➕ افزودن پنل جدید$"), self.handle_panel_url),
-                MessageHandler(filters.Regex("^⏱ تغییر فاصله بکاپ$"), lambda update, context: self.handle_backup_interval(update, context)),
+                MessageHandler(filters.Regex("^⏱ تغییر فاصله بکاپ$"), 
+                    lambda update, context: self.handle_backup_interval(update, context)),
+                MessageHandler(filters.Regex("^🗑 حذف پنل"), self.handle_button_press),
                 MessageHandler(filters.Regex("^👥 مدیریت ادمین‌ها$"), self.handle_button_press),
                 MessageHandler(filters.Regex("^➕ افزودن ادمین جدید$"), self.handle_button_press),
-                MessageHandler(filters.Regex("^❌ حذف ادمین$"), self.handle_button_press)
+                MessageHandler(filters.Regex("^❌ حذف ادمین$"), self.handle_button_press),
+                CallbackQueryHandler(self.button_handler)
             ],
             states={
                 PANEL_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_panel_url)],
@@ -1055,7 +1097,10 @@ class XUIBackupBot:
                 PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_password)],
                 CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_confirmation)],
                 SET_BACKUP_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_backup_interval)],
-                CONFIRM_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_button_press)],
+                CONFIRM_DELETE: [
+                    MessageHandler(filters.Regex("^✅ بله، حذف کن"), self.handle_button_press),
+                    MessageHandler(filters.Regex("^❌ خیر، انصراف$"), self.handle_button_press)
+                ],
                 ADD_ADMIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_add_admin)],
                 REMOVE_ADMIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_remove_admin)]
             },
@@ -1063,18 +1108,19 @@ class XUIBackupBot:
                 CommandHandler("cancel", self.cancel_conversation),
                 CommandHandler("start", self.start),
                 MessageHandler(filters.Regex("^🔙 بازگشت به منو$"), 
-                    lambda update, context: self.send_main_menu(context, update.message.chat_id))
+                    lambda update, context: self.send_main_menu(context, update.message.chat_id)),
+                CallbackQueryHandler(self.button_handler)
             ],
-            allow_reentry=True
+            allow_reentry=True,
+            name="main_conversation"
         )
 
         # اضافه کردن handlers
-        application.add_handler(CommandHandler("start", self.start))
         application.add_handler(conv_handler)
         
-        # هندلر برای دکمه‌های عمومی
+        # هندلر برای دکمه‌های عمومی (که در conversation handler پوشش داده نشده‌اند)
         application.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(➕ افزودن پنل جدید|⏱ تغییر فاصله بکاپ|🗑 حذف پنل|👥 مدیریت ادمین‌ها|➕ افزودن ادمین جدید|❌ حذف ادمین)$"),
+            filters.TEXT & ~filters.COMMAND,
             self.handle_button_press
         ))
 
