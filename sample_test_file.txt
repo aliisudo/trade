@@ -1,0 +1,8 @@
+سلام! این یک فایل نمونه است که توسط Grok ساخته شده.
+
+This is a sample file created by Grok to test GitHub connector access.
+
+Date: 2026-07-25
+User: aliisudo
+
+Access confirmed! ✅
